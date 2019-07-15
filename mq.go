@@ -42,6 +42,7 @@ func (mq *MQ) tryConnect() {
 		channel, err := connection.Channel()
 
 		if err != nil {
+			connection.Close()
 			fmt.Println("Get MQ channel failed", err)
 			time.Sleep(mq.RetryTime)
 			continue
@@ -96,7 +97,6 @@ func (mq *MQ) listen() {
 					fmt.Println("Channel has not been created")
 				}
 			}()
-		case <-time.After(time.Microsecond):
 		}
 	}
 }
