@@ -54,53 +54,54 @@ func (mq *MQ) tryConnect() {
 }
 
 func (mq *MQ) listen() {
-	for {
-		select {
-		case mb := <-mq.buffer:
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						fmt.Println("Recovered from panic", r)
-						mq.tryConnect()
-					}
-				}()
-
-				if mq.channel != nil {
-					queue, err := mq.channel.QueueDeclare(
-						mb.QueueName, // name
-						false,        // durable
-						false,        // delete when unused
-						false,        // exclusive
-						false,        // no-wait
-						nil,          // arguments
-					)
-
-					if err != nil {
-						mq.buffer <- mb
-						panic(err)
-					}
-
-					err = mq.channel.Publish(
-						"",         // exchange
-						queue.Name, // routing key
-						false,      // mandatory
-						false,      // immediate
-						amqp.Publishing{
-							Body: []byte(mb.Message),
-						})
-
-					if err != nil {
-						mq.buffer <- mb
-						panic(err)
-					}
-				} else {
-					fmt.Println("Channel has not been created")
+	for mb := range mq.buffer {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Recovered from panic", r)
+					mq.tryConnect()
 				}
 			}()
-		}
+
+			if mq.channel != nil {
+				queue, err := mq.channel.QueueDeclare(
+					mb.QueueName, // name
+					false,        // durable
+					false,        // delete when unused
+					false,        // exclusive
+					false,        // no-wait
+					nil,          // arguments
+				)
+
+				if err != nil {
+					mq.buffer <- mb
+					panic(err)
+				}
+
+				err = mq.channel.Publish(
+					"",         // exchange
+					queue.Name, // routing key
+					false,      // mandatory
+					false,      // immediate
+					amqp.Publishing{
+						Body: []byte(mb.Message),
+					})
+
+				if err != nil {
+					mq.buffer <- mb
+					panic(err)
+				}
+			} else {
+				fmt.Println("Channel has not been created")
+			}
+		}()
 	}
 }
 
 func (mq *MQ) Publish(queueName string, message string) {
-	mq.buffer <- MessageBody{queueName, message}
+	select {
+	case mq.buffer <- MessageBody{queueName, message}:
+	default:
+		fmt.Println("Channel full. Discarding value")
+	}
 }
