@@ -122,31 +122,32 @@ func (mq *MQ) Connected() bool {
 	return mq.channel != nil
 }
 
-// avoid too many connections in short time
 func (mq *MQ) tryConnect(newConnection NewConnection) {
-	defer mq.mutex.Unlock()
-	mq.mutex.Lock()
+	if !mq.Connected() { // Not very thread-safe, but enough here
+		defer mq.mutex.Unlock()
+		mq.mutex.Lock()
 
-	for {
-		if mq.Connected() {
-			break
-		} else {
-			connection, err := newConnection(mq.URI)
-			if err != nil {
-				fmt.Println("Get MQ connection failed", err)
-				time.Sleep(mq.RetryTime)
-				continue
+		for {
+			if mq.Connected() {
+				break
+			} else {
+				connection, err := newConnection(mq.URI)
+				if err != nil {
+					fmt.Println("Get MQ connection failed", err)
+					time.Sleep(mq.RetryTime)
+					continue
+				}
+				channel, err := connection.GetChannel()
+
+				if err != nil {
+					connection.Close()
+					fmt.Println("Get MQ channel failed", err)
+					time.Sleep(mq.RetryTime)
+					continue
+				}
+
+				mq.channel = channel
 			}
-			channel, err := connection.GetChannel()
-
-			if err != nil {
-				connection.Close()
-				fmt.Println("Get MQ channel failed", err)
-				time.Sleep(mq.RetryTime)
-				continue
-			}
-
-			mq.channel = channel
 		}
 	}
 }

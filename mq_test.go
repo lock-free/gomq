@@ -73,7 +73,7 @@ func TestPublish(t *testing.T) {
 
 func TestCrazyPublish(t *testing.T) {
 	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
-	for i := 0; i < 10000; i ++ {
+	for i := 0; i < 100; i ++ {
 		mq.Publish("test-queue", "test message")
 	}
 }
