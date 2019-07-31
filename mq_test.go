@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 	"errors"
-	"math/rand"
+	"sync"
 )
 
 type MockConnection struct {}
@@ -13,36 +13,50 @@ type MockQueue struct {
 	Name string
 }
 
-func init() {
-	rand.Seed(time.Now().Unix()) // initialize global pseudo random generator
+var mutex sync.RWMutex
+
+var errorMap = map[string]error {
+	"NewConnection": nil,
+	"GetChannel": nil,
+	"Close": nil,
+	"DeclareQueueByName": nil,
+	"Publish": nil,
 }
 
-func getRandError(errs []error) error {
-	return errs[rand.Intn(len(errs))] 
+func getErrorByName(name string) error {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	return errorMap[name] 
 }
+
+func resetErrorMap() {
+	mutex.Lock()
+	defer mutex.Unlock()
+	errorMap = map[string]error {
+		"NewConnection": nil,
+		"GetChannel": nil,
+		"Close": nil,
+		"DeclareQueueByName": nil,
+		"Publish": nil,
+	} 
+}
+
+func updateErrorMap(key string) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	errorMap[key] = errors.New(key + " failed")
+} 
 
 func NewMockConnection(URI string) (Connection, error) {
-	errs := []error{
-		errors.New("New connection failed"),
-		nil,
-	}
-	return MockConnection{}, getRandError(errs)
+	return MockConnection{}, getErrorByName("NewMockConnection")
 }
 
 func (conn MockConnection) GetChannel() (Channel, error) {
-	errs := []error{
-		errors.New("Get channel failed"),
-		nil,
-	}
-	return MockChannel{}, getRandError(errs) 
+	return MockChannel{}, getErrorByName("GetChannel") 
 }
 
 func (conn MockConnection) Close() error {
-	errs := []error{
-		errors.New("Close failed"),
-		nil,
-	}
-	return getRandError(errs)
+	return getErrorByName("Close")
 }
 
 func (queue MockQueue) GetName() string {
@@ -50,23 +64,28 @@ func (queue MockQueue) GetName() string {
 }
 
 func (channel MockChannel) DeclareQueueByName(queueName string) (Queue, error) {
-	errs := []error{
-		errors.New("Declare queue failed"),
-		nil,
-	}
-	return MockQueue{queueName}, getRandError(errs)
+	return MockQueue{queueName}, getErrorByName("DeclareQueueByName")
 }
 
 func (channel MockChannel) Publish(queueName string, message string) error {
-
-	errs := []error{
-		errors.New("Publish failed"),
-		nil,
-	}
-	return getRandError(errs)
+	return getErrorByName("Publish")
 }
 
 func TestPublish(t *testing.T) {
+	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
+	mq.Publish("test-queue", "test message")
+}
+
+func TestNewConnectionFailed(t *testing.T) {
+	updateErrorMap("NewConnection")
+	defer resetErrorMap()
+	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
+	mq.Publish("test-queue", "test message")
+}
+
+func TestGetChannelFailed(t *testing.T) {
+	updateErrorMap("GetChannel")
+	defer resetErrorMap()
 	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
 	mq.Publish("test-queue", "test message")
 }
