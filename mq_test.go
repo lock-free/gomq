@@ -13,8 +13,11 @@ type MockQueue struct {
 	Name string
 }
 
-func getRandError(errs []error) error {
+func init() {
 	rand.Seed(time.Now().Unix()) // initialize global pseudo random generator
+}
+
+func getRandError(errs []error) error {
 	return errs[rand.Intn(len(errs))] 
 }
 
@@ -64,13 +67,13 @@ func (channel MockChannel) Publish(queueName string, message string) error {
 }
 
 func TestPublish(t *testing.T) {
-	mq := NewMQ("test-url", 2*time.Second, NewMockConnection)
+	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
 	mq.Publish("test-queue", "test message")
 }
 
 func TestCrazyPublish(t *testing.T) {
-	mq := NewMQ("test-url", 2*time.Second, NewMockConnection)
-	for i := 0; i < BUFFER_SIZE + 1; i ++ {
+	mq := NewMQ("test-url", 2*time.Nanosecond, NewMockConnection)
+	for i := 0; i < 10000; i ++ {
 		mq.Publish("test-queue", "test message")
 	}
 }

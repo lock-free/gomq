@@ -166,14 +166,14 @@ func (mq *MQ) listen(newConnection NewConnection) {
 				queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
 
 				if err != nil {
-					fmt.Printf("Met error when declare queue: %s\n", err)
+					fmt.Printf("Encounter error when declare queue: %s\n", err)
 					mq.buffer <- mb
 					return
 				}
 
 				err = mq.channel.Publish(queue.GetName(), mb.Message)
 				if err != nil {
-					fmt.Printf("Met error when publish message: %s\n", err)
+					fmt.Printf("Encounter error when publish message: %s\n", err)
 					mq.buffer <- mb
 					return
 				}
