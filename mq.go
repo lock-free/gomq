@@ -4,8 +4,95 @@ import (
 	"fmt"
 	"time"
 
+	"errors"
 	"github.com/streadway/amqp"
+	"sync"
 )
+
+const BUFFER_SIZE = 500000
+
+type Connection interface {
+	GetChannel() (Channel, error)
+	Close() error
+}
+
+type Channel interface {
+	DeclareQueueByName(string) (Queue, error)
+	Publish(string, string) error
+}
+
+type Queue interface {
+	GetName() string
+}
+
+type RabbitConnection struct {
+	NativeConnection *amqp.Connection
+}
+
+type RabbitChannel struct {
+	NativeChannel *amqp.Channel
+}
+
+type RabbitQueue struct {
+	NativeQueue *amqp.Queue
+}
+
+type NewConnection func(string) (Connection, error)
+
+// return connection according to URI
+func NewRabbitConnection(URI string) (Connection, error) {
+	amqpNativeConn, err := amqp.Dial(URI)
+	if err != nil {
+		return nil, err
+	}
+	return RabbitConnection{amqpNativeConn}, nil
+}
+
+func (conn RabbitConnection) GetChannel() (Channel, error) {
+	nativeChannel, err := conn.NativeConnection.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	return RabbitChannel{nativeChannel}, nil
+}
+
+func (conn RabbitConnection) Close() error {
+	return conn.NativeConnection.Close()
+}
+
+func (channel RabbitChannel) DeclareQueueByName(queueName string) (Queue, error) {
+	nativeQueue, err := channel.NativeChannel.QueueDeclare(
+		queueName,
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return RabbitQueue{&nativeQueue}, nil
+}
+
+func (channel RabbitChannel) Publish(queueName string, message string) error {
+	return channel.NativeChannel.Publish(
+		"",
+		queueName,
+		false,
+		false,
+		amqp.Publishing{
+			Body: []byte(message),
+		},
+	)
+}
+
+func (queue RabbitQueue) GetName() string {
+	return queue.NativeQueue.Name
+}
 
 type MessageBody struct {
 	QueueName string
@@ -13,88 +100,89 @@ type MessageBody struct {
 }
 
 type MQ struct {
-	URI        string
-	RetryTime  time.Duration
-	buffer     chan MessageBody
-	connection *amqp.Connection
-	channel    *amqp.Channel
+	URI       string
+	RetryTime time.Duration
+	buffer    chan MessageBody
+	channel   Channel
+	mutex     *sync.RWMutex
 }
 
-func NewMQ(URI string, RetryTime time.Duration) *MQ {
-	mq := &MQ{URI, RetryTime, make(chan MessageBody, 500000), nil, nil}
-	mq.tryConnect()
-	go mq.listen()
+func NewMQ(URI string, RetryTime time.Duration, newConnection NewConnection) *MQ {
+	mq := &MQ{URI, RetryTime, make(chan MessageBody, BUFFER_SIZE), nil, &sync.RWMutex{}}
+	mq.tryConnect(newConnection)
+	go mq.listen(newConnection)
 	return mq
 }
 
-func (mq *MQ) tryConnect() {
+func (mq *MQ) Clean() {
+	mq.channel = nil
+}
+
+func (mq *MQ) Connected() bool {
+	return mq.channel != nil
+}
+
+// avoid too many connections in short time
+func (mq *MQ) tryConnect(newConnection NewConnection) {
+	defer mq.mutex.Unlock()
+	mq.mutex.Lock()
+
 	for {
-		fmt.Println("Trying to connect")
-		connection, err := amqp.Dial(mq.URI)
+		if mq.Connected() {
+			break
+		} else {
+			connection, err := newConnection(mq.URI)
+			if err != nil {
+				fmt.Println("Get MQ connection failed", err)
+				time.Sleep(mq.RetryTime)
+				continue
+			}
+			channel, err := connection.GetChannel()
 
-		if err != nil {
-			fmt.Println("Get MQ connection failed", err)
-			time.Sleep(mq.RetryTime)
-			continue
+			if err != nil {
+				connection.Close()
+				fmt.Println("Get MQ channel failed", err)
+				time.Sleep(mq.RetryTime)
+				continue
+			}
+
+			mq.channel = channel
 		}
-
-		mq.connection = connection
-		channel, err := connection.Channel()
-
-		if err != nil {
-			connection.Close()
-			fmt.Println("Get MQ channel failed", err)
-			time.Sleep(mq.RetryTime)
-			continue
-		}
-
-		mq.channel = channel
-		break
 	}
 }
 
-func (mq *MQ) listen() {
+func (mq *MQ) listen(newConnection NewConnection) {
 	for mb := range mq.buffer {
-		func() {
+		func(mb MessageBody) {
+			// FIXME:
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Println("Recovered from panic", r)
-					mq.tryConnect()
+					mq.tryConnect(newConnection)
 				}
 			}()
 
-			if mq.channel != nil {
-				queue, err := mq.channel.QueueDeclare(
-					mb.QueueName, // name
-					false,        // durable
-					false,        // delete when unused
-					false,        // exclusive
-					false,        // no-wait
-					nil,          // arguments
-				)
+			if mq.Connected() {
+				queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
 
 				if err != nil {
+					fmt.Printf("Met error when declare queue: %s\n", err)
 					mq.buffer <- mb
-					panic(err)
+					return
 				}
 
-				err = mq.channel.Publish(
-					"",         // exchange
-					queue.Name, // routing key
-					false,      // mandatory
-					false,      // immediate
-					amqp.Publishing{
-						Body: []byte(mb.Message),
-					})
-
+				err = mq.channel.Publish(queue.GetName(), mb.Message)
 				if err != nil {
+					fmt.Printf("Met error when publish message: %s\n", err)
 					mq.buffer <- mb
-					panic(err)
+					return
 				}
 			} else {
-				fmt.Println("Channel has not been created")
+				mq.buffer <- mb
+				mq.Clean()
+				panic(errors.New("MQ not connected"))
 			}
-		}()
+		}(mb)
 	}
 }
 
