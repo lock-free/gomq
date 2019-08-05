@@ -115,6 +115,8 @@ func NewMQ(URI string, RetryTime time.Duration, newConnection NewConnection) *MQ
 }
 
 func (mq *MQ) Clean() {
+	defer mq.mutex.Unlock()
+	mq.mutex.Lock()
 	mq.channel = nil
 }
 
@@ -154,8 +156,8 @@ func (mq *MQ) tryConnect(newConnection NewConnection) {
 
 func (mq *MQ) listen(newConnection NewConnection) {
 	for mb := range mq.buffer {
-		func(mb MessageBody) {
-			// FIXME:
+		// when MQ down, many goroutines blocked at lock part
+		go func(mb MessageBody) {
 			defer func() {
 				if r := recover(); r != nil {
 					fmt.Println("Recovered from panic", r)
@@ -169,6 +171,7 @@ func (mq *MQ) listen(newConnection NewConnection) {
 				if err != nil {
 					fmt.Printf("Encounter error when declare queue: %s\n", err)
 					mq.buffer <- mb
+					mq.Clean()
 					return
 				}
 
@@ -176,11 +179,11 @@ func (mq *MQ) listen(newConnection NewConnection) {
 				if err != nil {
 					fmt.Printf("Encounter error when publish message: %s\n", err)
 					mq.buffer <- mb
+					mq.Clean()
 					return
 				}
 			} else {
 				mq.buffer <- mb
-				mq.Clean()
 				panic(errors.New("MQ not connected"))
 			}
 		}(mb)
