@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"errors"
 	"github.com/streadway/amqp"
 	"sync"
 )
@@ -110,14 +109,8 @@ type MQ struct {
 func NewMQ(URI string, RetryTime time.Duration, newConnection NewConnection) *MQ {
 	mq := &MQ{URI, RetryTime, make(chan MessageBody, BUFFER_SIZE), nil, &sync.RWMutex{}}
 	mq.tryConnect(newConnection)
-	go mq.listen(newConnection)
+	go mq.listen()
 	return mq
-}
-
-func (mq *MQ) Clean() {
-	defer mq.mutex.Unlock()
-	mq.mutex.Lock()
-	mq.channel = nil
 }
 
 func (mq *MQ) Connected() bool {
@@ -154,37 +147,23 @@ func (mq *MQ) tryConnect(newConnection NewConnection) {
 	}
 }
 
-func (mq *MQ) listen(newConnection NewConnection) {
+func (mq *MQ) listen() {
 	for mb := range mq.buffer {
 		// when MQ down, many goroutines blocked at lock part
 		go func(mb MessageBody) {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Println("Recovered from panic", r)
-					mq.tryConnect(newConnection)
-				}
-			}()
+			queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
 
-			if mq.Connected() {
-				queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
-
-				if err != nil {
-					fmt.Printf("Encounter error when declare queue: %s\n", err)
-					mq.buffer <- mb
-					mq.Clean()
-					return
-				}
-
-				err = mq.channel.Publish(queue.GetName(), mb.Message)
-				if err != nil {
-					fmt.Printf("Encounter error when publish message: %s\n", err)
-					mq.buffer <- mb
-					mq.Clean()
-					return
-				}
-			} else {
+			if err != nil {
+				fmt.Printf("Encounter error when declare queue: %s\n", err)
 				mq.buffer <- mb
-				panic(errors.New("MQ not connected"))
+				return
+			}
+
+			err = mq.channel.Publish(queue.GetName(), mb.Message)
+			if err != nil {
+				fmt.Printf("Encounter error when publish message: %s\n", err)
+				mq.buffer <- mb
+				return
 			}
 		}(mb)
 	}
