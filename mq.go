@@ -166,12 +166,12 @@ func (mq *MQ) listen(newConnection NewConnection) {
 			queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
 
 			if err != nil {
+				fmt.Printf("Encounter error when declare queue: %s\n", err)
+				mq.buffer <- mb
 				if err == amqp.ErrClosed {
 					mq.Clean()
 					panic(err)
 				}
-				fmt.Printf("Encounter error when declare queue: %s\n", err)
-				mq.buffer <- mb
 				return
 			}
 
