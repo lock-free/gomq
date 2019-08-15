@@ -118,6 +118,10 @@ func (mq *MQ) Connected() bool {
 	return mq.channel != nil
 }
 
+func (mq *MQ) Clean() {
+	mq.channel = nil
+}
+
 func (mq *MQ) tryConnect(newConnection NewConnection) {
 	if !mq.Connected() { // Not very thread-safe, but enough here
 		defer mq.mutex.Unlock()
@@ -163,6 +167,7 @@ func (mq *MQ) listen(newConnection NewConnection) {
 
 			if err != nil {
 				if err == amqp.ErrClosed {
+					mq.Clean()
 					panic(err)
 				}
 				fmt.Printf("Encounter error when declare queue: %s\n", err)
