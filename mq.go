@@ -78,6 +78,7 @@ func (channel RabbitChannel) DeclareQueueByName(queueName string) (Queue, error)
 }
 
 func (channel RabbitChannel) Publish(queueName string, message string) error {
+	// if need reconnect, should handle here
 	return channel.NativeChannel.Publish(
 		"",
 		queueName,
@@ -109,7 +110,7 @@ type MQ struct {
 func NewMQ(URI string, RetryTime time.Duration, newConnection NewConnection) *MQ {
 	mq := &MQ{URI, RetryTime, make(chan MessageBody, BUFFER_SIZE), nil, &sync.RWMutex{}}
 	mq.tryConnect(newConnection)
-	go mq.listen()
+	go mq.listen(newConnection)
 	return mq
 }
 
@@ -147,13 +148,23 @@ func (mq *MQ) tryConnect(newConnection NewConnection) {
 	}
 }
 
-func (mq *MQ) listen() {
+func (mq *MQ) listen(newConnection NewConnection) {
 	for mb := range mq.buffer {
-		// when MQ down, many goroutines blocked at lock part
 		go func(mb MessageBody) {
+
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Recovered from panic", r)
+					mq.tryConnect(newConnection)
+				}
+			}()
+
 			queue, err := mq.channel.DeclareQueueByName(mb.QueueName)
 
 			if err != nil {
+				if err == amqp.ErrClosed {
+					panic(err)
+				}
 				fmt.Printf("Encounter error when declare queue: %s\n", err)
 				mq.buffer <- mb
 				return
