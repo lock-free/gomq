@@ -186,9 +186,5 @@ func (mq *MQ) listen(newConnection NewConnection) {
 }
 
 func (mq *MQ) Publish(queueName string, message string) {
-	select {
-	case mq.buffer <- MessageBody{queueName, message}:
-	default:
-		fmt.Println("Channel full. Discarding value")
-	}
+	mq.buffer <- MessageBody{queueName, message}
 }
